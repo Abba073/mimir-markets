@@ -1,0 +1,16 @@
+[package]
+name = "mimir-squad"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Mimir two-sided squad pool (Soroban port of contracts/MimirSquad.sol)"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
