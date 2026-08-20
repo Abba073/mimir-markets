@@ -13,6 +13,7 @@ import { isXmtpFeatureEnabled } from "@/lib/xmtp/config";
 
 function WalletAccountMenu({
   address,
+  networkWarning,
   open,
   onOpenChange,
   onDisconnect,
@@ -20,6 +21,17 @@ function WalletAccountMenu({
   buttonClassName,
 }: {
   address: string;
+  /**
+   * Set when the connected wallet reports a different Stellar network than the
+   * one Mimir submits to.
+   *
+   * Shown here rather than as a page banner with a "switch network" button,
+   * because there is no button to offer: Stellar wallets have no equivalent of an
+   * EVM chain-switch request, so the fix is in the wallet's own UI. The wallet
+   * menu is where someone goes to look at their wallet, which makes it the one
+   * place this belongs.
+   */
+  networkWarning: string | null;
   open: boolean;
   onOpenChange: (next: boolean) => void;
   onDisconnect: () => void;
@@ -76,6 +88,15 @@ function WalletAccountMenu({
               </p>
             </div>
 
+            {networkWarning ? (
+              <p
+                role="alert"
+                className="mb-1 rounded-xl border border-amber-400/35 bg-amber-400/[0.08] px-3.5 py-2.5 text-[12px] leading-relaxed text-amber-200"
+              >
+                {networkWarning}
+              </p>
+            ) : null}
+
             <button
               type="button"
               role="menuitem"
@@ -120,7 +141,8 @@ function WalletAccountMenu({
 }
 
 export default function Header() {
-  const { address, isConnected, isConnecting, connect, disconnect } = useWallet();
+  const { address, isConnected, isConnecting, connect, disconnect, networkWarning } =
+    useWallet();
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
@@ -262,6 +284,7 @@ export default function Header() {
               {isConnected && address ? (
                 <WalletAccountMenu
                   address={address}
+                  networkWarning={networkWarning}
                   open={walletMenuOpen}
                   onOpenChange={setWalletMenuOpen}
                   onDisconnect={disconnect}
@@ -286,6 +309,7 @@ export default function Header() {
               {isConnected && address ? (
                 <WalletAccountMenu
                   address={address}
+                  networkWarning={networkWarning}
                   open={walletMenuOpen}
                   onOpenChange={setWalletMenuOpen}
                   onDisconnect={disconnect}

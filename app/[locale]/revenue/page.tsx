@@ -52,8 +52,16 @@ function short(addr: string | null): string {
   return addr ? shortenAddress(addr) : "—";
 }
 
+/**
+ * A Stellar transaction hash is a bare 32-byte SHA-256 digest: 64 hex
+ * characters, NO `0x` prefix. The EVM-era regex here required the prefix, so
+ * every real receipt link on this page silently failed the check and rendered as
+ * plain text instead of a link to the explorer.
+ *
+ * The prefixed form is still accepted so archived EVM-era rows keep linking.
+ */
 function isTxHash(id: string | null): id is string {
-  return !!id && /^0x[0-9a-fA-F]{64}$/.test(id);
+  return !!id && /^(0x)?[0-9a-fA-F]{64}$/.test(id);
 }
 
 function ReceiptLink({ txHash }: { txHash: string | null }) {

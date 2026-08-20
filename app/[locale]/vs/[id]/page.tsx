@@ -26,6 +26,7 @@ import {
   requestResolveVS,
   resetVSResolveRequest,
   type ClaimChallenger,
+  type StellarSigner,
   type VSData,
 } from "@/lib/contract";
 import { getExplorerTxUrl, waitForTransaction } from "@/lib/stellar";
@@ -78,6 +79,8 @@ import SettlementExplanationCard from "@/components/SettlementExplanationCard";
 import ResolutionTerminal from "@/components/ResolutionTerminal";
 import { ShareMarket } from "@/components/vs/ShareMarket";
 import { ProfileLink } from "@/components/ui/AddressChip";
+import ClaimPayoutCard from "@/components/vs/ClaimPayoutCard";
+import { UsdcTrustlineGate } from "@/components/wallet/UsdcTrustlineGate";
 import VsXmtpPanel from "@/components/xmtp/VsXmtpPanel";
 import CouncilVoteWidget from "@/components/council/CouncilVoteWidget";
 import Stage from "@/components/Stage";
@@ -102,9 +105,21 @@ import {
   Users,
 } from "lucide-react";
 
-/** Dirección ficticia para previsualizar fases accepted / verifying / proven en VS de muestra (sin blockchain). */
+/**
+ * Direcciones ficticias para previsualizar fases accepted / verifying / proven en
+ * VS de muestra (sin blockchain).
+ *
+ * Real, checksum-valid `G…` strkeys rather than the repeated-nibble EVM addresses
+ * they replace: the header, the challenger roster and the explorer links all run
+ * these through `isAccountAddress` / `getExplorerAddressUrl`, so a stand-in that
+ * is not a valid strkey renders the sample market as broken.
+ */
 const DESIGN_PREVIEW_OPPONENT =
-  "0x2222222222222222222222222222222222222222";
+  "GARCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCFRVX";
+const DESIGN_PREVIEW_CHALLENGER_2 =
+  "GAZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTHCM6";
+const DESIGN_PREVIEW_CHALLENGER_3 =
+  "GBCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIZCA";
 
 /** Misma silueta que la píldora «{addr} challenges you» (fucsia, pill redondeada). */
 const DUEL_STATUS_FUCHSIA_PILL_CLASS =
@@ -176,7 +191,7 @@ function buildDesignPreviewVs(
       resolution_summary: "",
       winner_side: undefined,
       challenger_count: 3,
-      challenger_addresses: [DESIGN_PREVIEW_OPPONENT, "0x3333333333333333333333333333333333333333", "0x4444444444444444444444444444444444444444"],
+      challenger_addresses: [DESIGN_PREVIEW_OPPONENT, DESIGN_PREVIEW_CHALLENGER_2, DESIGN_PREVIEW_CHALLENGER_3],
       challengers: [
         {
           address: DESIGN_PREVIEW_OPPONENT,
@@ -184,12 +199,12 @@ function buildDesignPreviewVs(
           potential_payout: pot,
         },
         {
-          address: "0x3333333333333333333333333333333333333333",
+          address: DESIGN_PREVIEW_CHALLENGER_2,
           stake: base.stake_amount,
           potential_payout: pot,
         },
         {
-          address: "0x4444444444444444444444444444444444444444",
+          address: DESIGN_PREVIEW_CHALLENGER_3,
           stake: base.stake_amount,
           potential_payout: pot,
         },
@@ -220,12 +235,12 @@ function buildDesignPreviewVs(
             potential_payout: resolvedPot,
           },
           {
-            address: "0x3333333333333333333333333333333333333333",
+            address: DESIGN_PREVIEW_CHALLENGER_2,
             stake: base.stake_amount,
             potential_payout: resolvedPot,
           },
           {
-            address: "0x4444444444444444444444444444444444444444",
+            address: DESIGN_PREVIEW_CHALLENGER_3,
             stake: base.stake_amount,
             potential_payout: resolvedPot,
           },
@@ -662,13 +677,14 @@ function VsChallengersCard({
                             address={challenger.address}
                             className="break-words font-semibold text-[12px] leading-tight text-pv-text sm:text-[13px]"
                           />
-                          {address &&
-                            challenger.address.toLowerCase() ===
-                              address.toLowerCase() && (
-                              <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-pv-emerald">
-                                {t("you")}
-                              </span>
-                            )}
+                          {/* Exact comparison: strkeys are case-sensitive base32,
+                              so the lowercased pair this replaced would have
+                              stopped matching the connected wallet entirely. */}
+                          {address && challenger.address.trim() === address.trim() && (
+                            <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-pv-emerald">
+                              {t("you")}
+                            </span>
+                          )}
                         </div>
                         {counterPosition.trim() ? (
                           <p className="mt-1 text-[11px] leading-snug text-pv-muted sm:text-[12px]">
@@ -733,7 +749,7 @@ export default function VSDetailPage() {
   const vsId = Number(params.id);
   const isSampleVS = vsId < 0 && !!SAMPLE_VS[vsId];
   const inviteFromUrl = searchParams.get("invite")?.trim() ?? "";
-  const { address, isConnected, connect } = useWallet();
+  const { address, isConnected, connect, signer } = useWallet();
   const t = useTranslations("vsDetail");
   const tc = useTranslations("common");
   const tStamp = useTranslations("stamp");
@@ -1046,7 +1062,9 @@ export default function VSDetailPage() {
 
   const display = displayVs!;
 
-  const isCreator = address?.toLowerCase() === vs.creator.toLowerCase();
+  // Exact, trimmed comparison. Stellar strkeys are case-sensitive base32, so the
+  // `toLowerCase()` pair the EVM version used here would never match.
+  const isCreator = Boolean(address) && address!.trim() === vs.creator.trim();
   const isOpponent = didUserChallengeVS(display, address);
   const isPrivateVS = isVSPrivate(vs);
   const missingPrivateInvite = isPrivateVS && !inviteKey && !isCreator && !isOpponent;
@@ -1185,8 +1203,16 @@ export default function VSDetailPage() {
    * Shared guard for every on-chain action: wallet connected, one tx at a
    * time (tab-wide lock), and actionLoading reset when the action finishes.
    */
-  async function withTxLock(run: () => Promise<void>): Promise<void> {
+  async function withTxLock(run: (wallet: StellarSigner) => Promise<void>): Promise<void> {
     if (!isConnected || !address) {
+      return;
+    }
+    // Every write below needs a SIGNER, not an address. `lib/contract.ts` still
+    // accepts a bare string so unmigrated call sites compile, but it throws at
+    // call time — so the guard is here, once, rather than as a surprise inside
+    // each action.
+    if (!signer) {
+      toast.error(t("walletCannotSign"));
       return;
     }
     let releaseLock: (() => void) | undefined;
@@ -1197,7 +1223,7 @@ export default function VSDetailPage() {
       return;
     }
     try {
-      await run();
+      await run(signer);
     } finally {
       releaseLock?.();
       setActionLoading(null);
@@ -1213,7 +1239,7 @@ export default function VSDetailPage() {
       return;
     }
 
-    await withTxLock(async () => {
+    await withTxLock(async (wallet) => {
     flushSync(() => {
       setActionLoading("accept");
     });
@@ -1251,7 +1277,7 @@ export default function VSDetailPage() {
         address,
       });
 
-      const result = await acceptVS(address!, vsId, challengeStakeValue, inviteKey);
+      const result = await acceptVS(wallet, vsId, challengeStakeValue, inviteKey);
       const isPending = "pending" in result && Boolean(result.pending);
 
       if (!isPending) {
@@ -1303,7 +1329,7 @@ export default function VSDetailPage() {
   }
 
   async function handleResolve() {
-    await withTxLock(async () => {
+    await withTxLock(async (wallet) => {
     setActionLoading("resolve");
     if (willTriggerResolution) {
       setResolvePhase(0);
@@ -1318,7 +1344,7 @@ export default function VSDetailPage() {
     const startedAt = Date.now();
 
     try {
-      const result = await requestResolveVS(address!, vsId, inviteKey);
+      const result = await requestResolveVS(wallet, vsId, inviteKey);
       const isPending = "pending" in result && Boolean(result.pending);
       setHasAttemptedResolve(willTriggerResolution);
       toast.success(
@@ -1363,10 +1389,10 @@ export default function VSDetailPage() {
   }
 
   async function handleResetResolveRequest() {
-    await withTxLock(async () => {
+    await withTxLock(async (wallet) => {
     setActionLoading("resetResolve");
     try {
-      const result = await resetVSResolveRequest(address!, vsId, inviteKey);
+      const result = await resetVSResolveRequest(wallet, vsId, inviteKey);
       toast.success(t("resetResolveRequestSuccess"), txToastOptions(result));
       void fetchVS();
     } catch (err: any) {
@@ -1376,10 +1402,10 @@ export default function VSDetailPage() {
   }
 
   async function handleCancel() {
-    await withTxLock(async () => {
+    await withTxLock(async (wallet) => {
     setActionLoading("cancel");
     try {
-      const result = await cancelVS(address!, vsId, inviteKey);
+      const result = await cancelVS(wallet, vsId, inviteKey);
       const isPending = "pending" in result && Boolean(result.pending);
       toast.success(
         isPending ? t("submittedPending") : t("cancelledToast"),
@@ -1898,6 +1924,11 @@ export default function VSDetailPage() {
                 </GlassCard>
               )}
 
+              {/* A brand-new Stellar account cannot hold USDC until it trusts the
+                  issuer, so the first-ever stake needs this once. Renders nothing
+                  for an account that is already set up. */}
+              {canAccept && <UsdcTrustlineGate />}
+
               {canAccept && (
                 <GlassCard glass className="!rounded-2xl border border-pv-ink/[0.12]">
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,12rem)] sm:items-end">
@@ -2084,6 +2115,10 @@ export default function VSDetailPage() {
                   </div>
                 </GlassCard>
               )}
+
+              {/* Settlement is pull-based for challengers, so a won market needs a
+                  button or the escrow just sits there. See ClaimPayoutCard. */}
+              <ClaimPayoutCard vs={display} onCollected={fetchVS} />
 
               {canRequestResolve && actionLoading !== "resolve" && (
                 <GlassCard glass className="!rounded-2xl border border-pv-emerald/20">
