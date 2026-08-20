@@ -1,0 +1,122 @@
+# AGENTS.md — Mimir
+
+This repository contains Mimir, an AI-settled prediction market on
+**Stellar Testnet** (network passphrase `Test SDF Network ; September 2015`,
+CAIP-2 `stellar:testnet`).
+
+See `docs/STELLAR_NETWORK.md` for the one-page architecture reference.
+
+## Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `contracts-soroban/mimir-market/` | Rust/Soroban market contract (USDC escrow, settlement, fee policy) |
+| `contracts-soroban/mimir-squad/` | Rust/Soroban two-sided squad pools |
+| `lib/stellar.ts` | Stellar Testnet config (RPC/Horizon, passphrase, explorer links, `getEvents` scans) |
+| `lib/usdc.ts` | Circle Testnet USDC: Stellar Asset Contract id, issuer, 7-decimal helpers |
+| `lib/contract.ts` | TypeScript contract client (reads + writes through the generated bindings) |
+| `lib/wallet.tsx` | Wallet context (Stellar Wallets Kit: Freighter, xBull, Albedo, Lobstr, Hana) |
+| `lib/wallet-connectors.ts` | Connector list and per-wallet capability matrix |
+| `lib/stellar-message.ts` | SEP-43 `signMessage` verification (Ed25519, base64) |
+| `lib/content-hash.ts` | SHA-256 content hashing — the hash Soroban's host exposes |
+| `lib/agent-wallets.ts` | Local Stellar keypairs for oracle / creator / council |
+| `lib/agents/wallet-adapter.ts` | Vendor-neutral wallet boundary + budget policy for BYOA |
+| `lib/agents/spend-permissions.ts` | Owner-signed spend permissions over the USDC SAC allowance |
+| `lib/x402/config.ts` | Network, prices and Bazaar metadata for every paid endpoint |
+| `lib/x402/stellar-scheme.ts` | The Stellar-native x402 `exact` scheme (buyer, seller, verification) |
+| `lib/x402/server.ts` | x402 v2 seller paywall (`@x402/next`) + settlement recording |
+| `lib/x402/buyer.ts` | x402 v2 buyer with a hard USDC budget cap (`@x402/fetch`) |
+| `agents/oracle/index.ts` | Off-chain AI oracle agent (LLM + local keypair) |
+| `agents/market-creator/index.ts` | Autonomous market creator (LLM + local keypair) |
+| `agents/council/` | Ten AI personas that stake as economic actors |
+| `deploy/deploy.ts` | Soroban build/deploy/initialize script |
+| `scripts/stellar-keys.ts` | Keypairs + Friendbot funding + USDC trustline |
+| `scripts/create-agent-wallets.ts` | Generate 12 keypairs (oracle + creator + 10 personas) |
+| `scripts/fund-agents.ts` | Fund agent accounts from a master seed |
+| `scripts/check-forbidden-terms.mjs` | Guardrail: no pre-Stellar chain or bespoke-402 residue |
+
+## Key rules
+
+- Contract state is the source of truth. Neon Postgres is a read-index cache only.
+- **Two assets, one job each.** Native **XLM** pays the ledger fee and the account
+  reserve, and nothing else — it is never an argument to a contract call, because
+  Soroban has no payable invocation. **USDC** (7 decimals, Circle's Testnet issuance
+  reached through its Stellar Asset Contract) carries every value flow: market
+  stakes, payouts, agent bankrolls and x402 payments.
+- **Every account funds its own fees.** There is no sponsorship, by product
+  decision: an operation costs ~100 stroops, so there is nothing worth sponsoring.
+- Stakes need **no allowance**. Soroban authorises per invocation:
+  `challenge_claim` carries an authorisation entry permitting exactly one USDC
+  transfer of exactly the staked amount. `lib/contract.ts` builds one transaction,
+  the user signs once. Allowances (`lib/agents/spend-permissions.ts`) exist only for
+  the delegated BYOA case.
+- **A first-time account signs twice, once.** A USDC trustline is a classic
+  operation and a transaction containing a Soroban operation must contain exactly
+  one operation, so the trustline cannot ride along with the stake.
+- Resolution is oracle-only. `resolve_claim` requires authorisation from the
+  `oracle` address stored in the contract. Do not expose user-triggered resolution.
+- **Challenger settlement is pull-based.** `resolve_claim` deliberately does not
+  loop over challengers: a transaction is capped on its ledger-entry footprint and
+  ~100 challengers do not fit. It seeds `remaining_escrow`; each winner calls
+  `claim_challenger_payout` once, O(1), and the last claimant absorbs the dust.
+  `withdraw` and `claim_fees` are the other two pull paths.
+- Hash with **SHA-256** (`lib/content-hash.ts`), never keccak. `env.crypto().sha256()`
+  is the Soroban host primitive, so a contract can recompute the digest; there is no
+  keccak host function. Both are 32 bytes, so every `BytesN<32>` field takes it
+  unchanged — but a pre-migration digest will not match a fresh one.
+- Agents sign with **local Stellar seeds** held only in the worker process env
+  (`STELLAR_ORACLE_SECRET`, `CREATOR_SECRET`, `COUNCIL_<SLUG>_SECRET`). The web
+  server never sees a seed — only `G…` addresses for display and payment routing.
+- **`G…`/`C…` strkeys are case-sensitive base32.** Never lowercase one for
+  comparison; the EVM `toLowerCase()` habit turns a valid address into one that
+  matches nothing.
+- Paid endpoints speak **x402 v2** only, in the Stellar-native `exact` scheme: the
+  buyer submits its own USDC `Payment` and presents a signed proof; the seller reads
+  the transaction back off Horizon. No facilitator, no HTTP third party. Never
+  reintroduce manual transaction inspection or custom payment headers.
+- Money is accounted in **atomic integers**. `payments_v2.amount_atomic` is
+  `NUMERIC(78,0)`; decimals are applied at the API/UI edge only.
+- When a contract in `contracts-soroban/` changes, regenerate bindings
+  (`npm run stellar:bindings`) and keep `lib/contract.ts` in sync.
+- Categories: `sports`, `weather`, `crypto`, `culture`, `custom` (English).
+
+## Oracle agent
+
+```bash
+# Start the oracle (needs STELLAR_ORACLE_SECRET + an LLM key)
+npm run oracle
+```
+
+The oracle polls for active claims past their deadline, fetches evidence,
+evaluates with an LLM, and sends `resolve_claim` to the contract on Stellar Testnet.
+
+## Agents bootstrap
+
+```bash
+# 1. Generate all twelve keypairs (writes seeds + addresses into .env.local)
+npm run agents:create-wallets
+
+# 2. Fund from a master account (Friendbot tops up the master only).
+#    Each agent needs test USDC for stakes plus a little XLM for fees and reserve.
+npm run agents:fund
+
+# 3. Deploy and initialize the contracts
+npm run deploy:contract
+
+# 4. Verify the deployment, then smoke-test it end to end
+npm run verify:deployment
+npm run smoke:onchain
+
+# 5. Run workers
+npm run workers   # oracle + market-creator + council + sync + traders
+```
+
+Buying data over x402 needs no sponsor and no separate approval: the agent pays
+its own ~100-stroop fee and its own USDC. XLM is required for every write the
+agent makes, including those payments.
+
+Faucets: XLM from Friendbot (https://lab.stellar.org/account/fund), test USDC from
+https://faucet.circle.com
+Explorer: https://stellar.expert/explorer/testnet
+Public endpoints (rate-limited): https://soroban-testnet.stellar.org and
+https://horizon-testnet.stellar.org
