@@ -43,7 +43,7 @@ export type EvidenceFetcherKind = "coingecko-api" | "direct" | "jina" | "bot-pai
 
 /** What the agent paid to obtain a paywalled evidence source. */
 export interface EvidencePayment {
-  /** Price in USDC atomic units (6dp). */
+  /** Price in USDC atomic units (7dp — see lib/usdc.ts). */
   priceUnits: string;
   /** On-chain transfer hash proving the payment. */
   txHash: string;

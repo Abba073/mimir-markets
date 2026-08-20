@@ -1,9 +1,12 @@
 /**
  * What a basket subscriber has not mirrored yet.
  *
- * Following a basket records an intent; it cannot move money on its own, because
- * the contract takes the stake from `msg.sender` and Mimir holds no key for the
- * subscriber. Delegated signing would need a Base Sub Account and a bundler.
+ * Following a basket records an intent; it cannot move money on its own. Soroban
+ * has no `msg.sender` for a top-level call, so the staking account is an explicit
+ * argument that must itself authorise — `challenge_claim(challenger, …)` cannot
+ * execute without that account's signature, and Mimir holds no key for the
+ * subscriber. Delegated signing would need an owner-granted USDC allowance
+ * (`lib/agents/spend-permissions.ts`), which a plain basket follower has not given.
  *
  * So the honest middle is this: compute what the subscriber WOULD have mirrored,
  * show it, and let them sign it themselves in one click. No custody, no waiting on
