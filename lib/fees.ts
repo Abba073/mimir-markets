@@ -1,9 +1,9 @@
 /**
  * Fee accounting, in USDC atomic units.
  *
- * This module is the reference the v2 contract mirrors, the same way lib/payout.ts
- * mirrors Mimir.sol today. Every number is an integer; there is no floating point
- * anywhere in the accounting path.
+ * This module is the off-chain mirror of `contracts-soroban/mimir-market/src/fees.rs`,
+ * the same way lib/payout.ts mirrors the contract's settlement arithmetic. Every
+ * number is an integer; there is no floating point anywhere in the accounting path.
  *
  * ── The decision that shapes everything ──────────────────────────────────────
  *
@@ -380,7 +380,7 @@ export function noWinnerLosesPrincipal(
  * trading alone, and a fee that eats a meaningful share of the edge breaks that
  * promise before the agent gets a chance to keep it.
  *
- * Two of these three are enforced by MimirV2 itself (platform and agent owner,
+ * Two of these three are enforced by `mimir-market` itself (platform and agent owner,
  * charged at settlement and accrued to a claimable balance). The basket creator's
  * share has no on-chain leg — the contract has exactly two — so it is accounted
  * here and settles wherever the basket money path ends up. Marked, not hidden.
