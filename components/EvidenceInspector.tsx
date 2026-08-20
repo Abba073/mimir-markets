@@ -129,8 +129,8 @@ export function EvidenceInspector({ vs }: EvidenceInspectorProps) {
                 </code>
               </div>
               <p className="mt-1 text-[11px] text-pv-muted">
-                The oracle fetched the evidence URL, hashed it with keccak256, and stored this hash on Base.
-                You can verify the evidence by fetching the URL and computing keccak256 of the text content.
+                The oracle fetched the evidence URL, hashed it with SHA-256, and stored this hash on Stellar.
+                You can verify the evidence by fetching the URL and computing the SHA-256 of the text content.
               </p>
             </div>
           )}
