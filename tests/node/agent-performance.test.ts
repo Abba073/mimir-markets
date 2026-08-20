@@ -5,9 +5,18 @@ import {
   classifyTrade, computeAgentPerformance, usdcDisplayToAtomic, windowSinceMs,
   type AgentTradeRow,
 } from "../../lib/agents/performance";
+import { USDC_UNIT } from "../../lib/usdc";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
+
+/**
+ * Amounts are asserted as arithmetic on {@link USDC_UNIT}, never as decimal
+ * literals. A hardcoded `2_000_000n` asserted "6 decimals" just as happily as it
+ * asserted "2 USDC", which is exactly how this module's scale drifted out of step
+ * with `lib/usdc.ts` without a single test failing.
+ */
+const U = USDC_UNIT;
 
 function trade(overrides: Partial<AgentTradeRow> = {}): AgentTradeRow {
   return {
@@ -19,37 +28,38 @@ function trade(overrides: Partial<AgentTradeRow> = {}): AgentTradeRow {
 }
 
 test("display USDC converts without float drift", () => {
-  assert.equal(usdcDisplayToAtomic(2), 2_000_000n);
-  // 2.05 * 1e6 is 2049999.9999999998 as a float multiply.
-  assert.equal(usdcDisplayToAtomic(2.05), 2_050_000n);
-  assert.equal(usdcDisplayToAtomic(0.000001), 1n);
+  assert.equal(usdcDisplayToAtomic(2), 2n * U);
+  // 2.05 * 1e7 is 20499999.999999998 as a float multiply.
+  assert.equal(usdcDisplayToAtomic(2.05), (205n * U) / 100n);
+  // One atomic unit: the smallest amount the asset can express.
+  assert.equal(usdcDisplayToAtomic(0.0000001), 1n);
   assert.equal(usdcDisplayToAtomic(0), 0n);
-  assert.equal(usdcDisplayToAtomic(-1.5), -1_500_000n);
-  // Beyond six decimals the chain has no room either; truncation, not a throw.
-  assert.equal(usdcDisplayToAtomic(1.0000004), 1_000_000n);
+  assert.equal(usdcDisplayToAtomic(-1.5), -(3n * U) / 2n);
+  // Beyond the asset's decimals the ledger has no room either; truncation, not a throw.
+  assert.equal(usdcDisplayToAtomic(1.00000004), U);
   assert.equal(usdcDisplayToAtomic(Number.NaN), 0n);
 });
 
 test("a winning creator gains the pooled challenger stake", () => {
   const result = classifyTrade(trade({ stake: 2, opposingStake: 2, winnerSide: "creator" }));
   assert.equal(result.outcome, "won");
-  assert.equal(result.pnlAtomic, 2_000_000n);
+  assert.equal(result.pnlAtomic, 2n * U);
 });
 
 test("a losing side loses exactly its stake, never more", () => {
   const creator = classifyTrade(trade({ stake: 2, opposingStake: 6, winnerSide: "challengers" }));
   assert.equal(creator.outcome, "lost");
-  assert.equal(creator.pnlAtomic, -2_000_000n, "a creator cannot lose more than it staked");
+  assert.equal(creator.pnlAtomic, -2n * U, "a creator cannot lose more than it staked");
 
   const challenger = classifyTrade(trade({ role: "challenger", stake: 3, potentialPayout: 6, winnerSide: "creator" }));
   assert.equal(challenger.outcome, "lost");
-  assert.equal(challenger.pnlAtomic, -3_000_000n);
+  assert.equal(challenger.pnlAtomic, -3n * U);
 });
 
 test("a winning challenger gains payout minus its own stake", () => {
   const result = classifyTrade(trade({ role: "challenger", stake: 2, potentialPayout: 3.5, winnerSide: "challengers" }));
   assert.equal(result.outcome, "won");
-  assert.equal(result.pnlAtomic, 1_500_000n, "payout is gross, so the stake comes back out");
+  assert.equal(result.pnlAtomic, (3n * U) / 2n, "payout is gross, so the stake comes back out");
 });
 
 test("draws, unresolvable settlements and cancellations refund rather than score", () => {
@@ -84,11 +94,11 @@ test("totals separate realised P&L from open exposure", () => {
   assert.equal(performance.losses, 1);
   assert.equal(performance.refunds, 1);
   assert.equal(performance.realisedPnlAtomic, 0n, "+2 then -2");
-  assert.equal(performance.openExposureAtomic, 5_000_000n);
-  assert.equal(performance.volumeAtomic, 10_000_000n, "volume counts every stake");
+  assert.equal(performance.openExposureAtomic, 5n * U);
+  assert.equal(performance.volumeAtomic, 10n * U, "volume counts every stake");
   assert.equal(performance.winRateBps, 5_000, "refunds are not decisions");
-  assert.equal(performance.bestPnlAtomic, 2_000_000n);
-  assert.equal(performance.worstPnlAtomic, -2_000_000n);
+  assert.equal(performance.bestPnlAtomic, 2n * U);
+  assert.equal(performance.worstPnlAtomic, -2n * U);
 });
 
 test("a time window filters settled history but never hides open exposure", () => {
@@ -99,12 +109,12 @@ test("a time window filters settled history but never hides open exposure", () =
   ];
   const day = computeAgentPerformance(rows, { sinceMs: NOW - 24 * HOUR }).performance;
   assert.equal(day.settled, 1, "the 40h-old settlement falls outside 24h");
-  assert.equal(day.realisedPnlAtomic, -3_000_000n);
-  assert.equal(day.openExposureAtomic, 4_000_000n, "an old open stake is still exposure today");
+  assert.equal(day.realisedPnlAtomic, -3n * U);
+  assert.equal(day.openExposureAtomic, 4n * U, "an old open stake is still exposure today");
 
   const all = computeAgentPerformance(rows).performance;
   assert.equal(all.settled, 2);
-  assert.equal(all.realisedPnlAtomic, -1_000_000n);
+  assert.equal(all.realisedPnlAtomic, -1n * U);
 });
 
 test("win rate is zero rather than NaN when nothing has been decided", () => {

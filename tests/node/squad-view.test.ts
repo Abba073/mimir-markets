@@ -3,14 +3,23 @@ import test from "node:test";
 
 import { buildSquadView, squadEscrowAvailable, type SquadInput } from "../../lib/squad-view";
 
-const CREATOR = "0xAAA0000000000000000000000000000000000001";
+// Real Stellar account strkeys: case-SENSITIVE upper-case base32, no 0x prefix.
+const CREATOR = "GDF2HVBX3KPIDWTSQUTUASSNPYMV42N7FCZ2QBHH7WU52OZPTOAOCB77";
+const [B1, B2, B3, B4, B5, B6] = [
+  "GB5DLP3MNPUXXJ6P67XGD3OV3ZVIMZN3NZDLVDIYQN6JSC2M7QMMBL4E",
+  "GDYJ7GZ4WDGYFE6R3HFBUK2GYMFIFP3JHFYSYAME6XISG5BEKZDJVGHN",
+  "GBN2L4ZEKW3MBQWESGSTUEHR7JEZ6RC66WTWVVKJKNOMTY4NBAU3JLIM",
+  "GBZQZ3EE4HIIXP5QSAIYYB4NNIYCI472TJKXY2S7JYB6ZAQUW5JNREU7",
+  "GDAZHR65DIME676U6VLZUPMZBD32OBWE3YSJTC4LKZF4YXYFZYUQDDXZ",
+  "GBEXMECVZKYHVJPFXSQLZKR6UQX7N6MPWSS75ETUTEDMFB5FFKUL5DZW",
+] as const;
 
 function input(overrides: Partial<SquadInput> = {}): SquadInput {
   return {
     creator: CREATOR,
     creatorStakeUnits: 10_000_000n,
     challengerStakeUnits: 30_000_000n,
-    challengerAddresses: ["0xb1", "0xb2", "0xb3"],
+    challengerAddresses: [B1, B2, B3],
     challengerCount: 3,
     joinable: true,
     ...overrides,
@@ -66,16 +75,26 @@ test("a negative stake is clamped rather than inverting the split", () => {
 
 test("a repeated challenger address stacks one avatar, not two", () => {
   const view = buildSquadView(
-    input({ challengerAddresses: ["0xb1", "0xB1", "0xb2"], challengerCount: 2 }),
+    input({ challengerAddresses: [B1, `  ${B1}  `, B2], challengerCount: 2 }),
   );
-  assert.deepEqual(view.sides[1].avatars, ["0xb1", "0xb2"]);
+  assert.deepEqual(view.sides[1].avatars, [B1, B2]);
   assert.equal(view.sides[1].participantCount, 2);
+});
+
+test("addresses are emitted verbatim, never case-folded", () => {
+  // The EVM version deduplicated on `toLowerCase()`, which is exactly wrong here:
+  // a strkey is case-SENSITIVE base32, so folding it emits an address that is no
+  // longer valid — one nothing can be paid to and no explorer will resolve.
+  const view = buildSquadView(input({ challengerAddresses: [B1], challengerCount: 1 }));
+  assert.deepEqual(view.sides[1].avatars, [B1]);
+  assert.deepEqual(view.sides[0].avatars, [CREATOR]);
+  assert.equal(view.sides[1].avatars[0], view.sides[1].avatars[0].toUpperCase());
 });
 
 test("avatars are capped by the display budget without losing the count", () => {
   const view = buildSquadView(
     input({
-      challengerAddresses: ["0xb1", "0xb2", "0xb3", "0xb4", "0xb5", "0xb6"],
+      challengerAddresses: [B1, B2, B3, B4, B5, B6],
       challengerCount: 6,
       avatarBudget: 2,
     }),
@@ -86,20 +105,20 @@ test("avatars are capped by the display budget without losing the count", () => 
 
 test("the on-chain count wins when the address list is truncated", () => {
   // The read-index may hold fewer addresses than the contract has challengers.
-  const view = buildSquadView(input({ challengerAddresses: ["0xb1"], challengerCount: 9 }));
+  const view = buildSquadView(input({ challengerAddresses: [B1], challengerCount: 9 }));
   assert.equal(view.sides[1].participantCount, 9);
 });
 
 test("a longer address list than the reported count is still counted in full", () => {
   const view = buildSquadView(
-    input({ challengerAddresses: ["0xb1", "0xb2", "0xb3"], challengerCount: 1 }),
+    input({ challengerAddresses: [B1, B2, B3], challengerCount: 1 }),
   );
   assert.equal(view.sides[1].participantCount, 3);
 });
 
 test("blank addresses are dropped", () => {
-  const view = buildSquadView(input({ challengerAddresses: ["", "  ", "0xb1"], challengerCount: 1 }));
-  assert.deepEqual(view.sides[1].avatars, ["0xb1"]);
+  const view = buildSquadView(input({ challengerAddresses: ["", "  ", B1], challengerCount: 1 }));
+  assert.deepEqual(view.sides[1].avatars, [B1]);
 });
 
 test("the real escrow is gated on the contract version", () => {
