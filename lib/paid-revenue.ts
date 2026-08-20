@@ -2,7 +2,7 @@
  * Payments revenue ledger — tracks the x402 USDC settlements Mimir's paid
  * endpoints earn.
  *
- * Accounting is done on atomic integers (`amount_atomic`, USDC 6dp). Decimal
+ * Accounting is done on atomic integers (`amount_atomic`, USDC 7dp). Decimal
  * conversion happens in the API/UI layer only — never in the ledger, never in
  * the SUMs. Durable in Neon (payments_v2); falls back to an in-memory ring
  * buffer (last 1000 events) when DATABASE_URL is unset, so serving never breaks.
