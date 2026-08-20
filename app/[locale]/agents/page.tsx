@@ -364,7 +364,7 @@ export default async function AgentsPage({
               </a>
             </div>
             <p className="mt-1 text-sm text-pv-text/85">
-              Reads expired claims, fetches evidence, asks an LLM, and settles. With auto-challenger on, also stakes ETH on mispriced open claims using Kelly.
+              Reads expired claims, fetches evidence, asks an LLM, and settles. With auto-challenger on, also stakes USDC on mispriced open claims using Kelly.
             </p>
             <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
               <div>
