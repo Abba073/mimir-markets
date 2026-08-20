@@ -9,6 +9,21 @@
  *
  * Debe montarse **dentro** de `WalletProvider`.
  *
+ * ── Identity ────────────────────────────────────────────────────────────────
+ *
+ * XMTP's protocol requires an address-shaped inbox identity, which a Stellar
+ * `G…` account is not. Rather than demand a second wallet, the connected
+ * Stellar wallet signs one fixed message and `lib/xmtp/identity.ts` derives that
+ * identity from the signature — deterministically, so the same account gets the
+ * same inbox back on any device. That prompt is deliberately behind
+ * `isXmtpFeatureEnabled()`: with the flag off, no wallet dialog ever opens.
+ *
+ * The two failure modes this provider used to report — "the connected wallet is
+ * a Stellar account" and "no injected provider" — are gone, because neither is
+ * a failure anymore. What can still fail is the derivation signature itself
+ * (declined, or a wallet that cannot sign messages at all), which surfaces as
+ * `status: "error"` with the message from `XmtpSignerError`.
+ *
  * @see https://docs.xmtp.org/chat-apps/core-messaging/create-a-client
  */
 
@@ -28,10 +43,8 @@ import {
   getXmtpClientCreateOptions,
   isXmtpFeatureEnabled,
 } from "@/lib/xmtp/config";
-import {
-  createXmtpSignerFromEthereum,
-  type EthereumEip1193Provider,
-} from "@/lib/xmtp/signer";
+import { clearXmtpIdentityCache } from "@/lib/xmtp/identity";
+import { createXmtpSignerForStellarAccount } from "@/lib/xmtp/signer";
 
 export type XmtpClientStatus =
   /** Sin wallet o aún no aplicable */
@@ -50,8 +63,13 @@ export type XmtpContextValue = {
   client: XmtpClientInstance | null;
   status: XmtpClientStatus;
   error: Error | null;
-  /** Dirección con la que se intentó / logró inicializar (null si idle/disabled). */
+  /** Cuenta Stellar con la que se intentó / logró inicializar (null si idle/disabled). */
   activeAddress: string | null;
+  /**
+   * Inbox identity derived from `activeAddress` — the address XMTP knows this
+   * user by. Null until derivation succeeds.
+   */
+  inboxAddress: string | null;
   /** Indica si la feature flag está encendida (build-time). */
   featureEnabled: boolean;
   /** Reintenta `Client.create` tras un fallo (misma cuenta). */
@@ -63,6 +81,7 @@ const defaultValue: XmtpContextValue = {
   status: "idle",
   error: null,
   activeAddress: null,
+  inboxAddress: null,
   featureEnabled: false,
   retry: () => {},
 };
@@ -164,27 +183,8 @@ function getTabId(): string {
 }
 /* ── end tab-lock ── */
 
-function getInjectedEthereum(): EthereumEip1193Provider | null {
-  if (typeof window === "undefined") return null;
-  const eth = (window as unknown as { ethereum?: EthereumEip1193Provider })
-    .ethereum;
-  return eth ?? null;
-}
-
-/**
- * XMTP inbox identities are Ethereum accounts — that is protocol, not a Mimir
- * choice — so an XMTP client cannot be created for the `G…` strkey the Stellar
- * wallet layer now provides.
- *
- * This guard exists because without it a Stellar address would be handed to
- * `createXmtpSignerFromEthereum` and the failure would surface deep inside the
- * XMTP SDK as an opaque address error. The feature is off by default
- * (`NEXT_PUBLIC_FEATURE_XMTP`); when it is on, this reports the real reason.
- */
-const EVM_IDENTITY = /^0x[0-9a-fA-F]{40}$/;
-
 export function XmtpProvider({ children }: { children: React.ReactNode }) {
-  const { address, isConnected } = useWallet();
+  const { address, isConnected, signMessage } = useWallet();
   const featureEnabled = useMemo(() => isXmtpFeatureEnabled(), []);
 
   const [client, setClient] = useState<XmtpClientInstance | null>(null);
@@ -193,7 +193,14 @@ export function XmtpProvider({ children }: { children: React.ReactNode }) {
   );
   const [error, setError] = useState<Error | null>(null);
   const [activeAddress, setActiveAddress] = useState<string | null>(null);
+  const [inboxAddress, setInboxAddress] = useState<string | null>(null);
   const [retryTrigger, setRetryTrigger] = useState(0);
+
+  // `signMessage` from the wallet context is a stable `useCallback`, but the
+  // init effect must not re-run if that ever stops being true: re-running it
+  // would mean a second wallet prompt.
+  const signMessageRef = useRef(signMessage);
+  signMessageRef.current = signMessage;
 
   const clientRef = useRef<XmtpClientInstance | null>(null);
   const initGenRef = useRef(0);
@@ -238,6 +245,7 @@ export function XmtpProvider({ children }: { children: React.ReactNode }) {
       setStatus("disabled");
       setClient(null);
       setActiveAddress(null);
+      setInboxAddress(null);
       setError(null);
       if (clientRef.current) {
         try {
@@ -264,29 +272,12 @@ export function XmtpProvider({ children }: { children: React.ReactNode }) {
       lockReleaseRef.current = null;
       setClient(null);
       setActiveAddress(null);
+      setInboxAddress(null);
       setError(null);
       setStatus("idle");
-      return;
-    }
-
-    if (!EVM_IDENTITY.test(address)) {
-      setClient(null);
-      setActiveAddress(null);
-      setError(
-        new Error(
-          "Chat needs an Ethereum-compatible inbox identity, which XMTP requires. The connected wallet is a Stellar account.",
-        ),
-      );
-      setStatus("error");
-      return;
-    }
-
-    const ethereum = getInjectedEthereum();
-    if (!ethereum) {
-      setClient(null);
-      setActiveAddress(null);
-      setError(new Error("XMTP: no injected Ethereum provider"));
-      setStatus("error");
+      // The derived key is memory-only; dropping it on disconnect means the next
+      // account signs for its own identity instead of inheriting this one.
+      clearXmtpIdentityCache();
       return;
     }
 
@@ -309,7 +300,15 @@ export function XmtpProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       let newClient: XmtpClientInstance | null = null;
       try {
-        const signer = createXmtpSignerFromEthereum(ethereum, address);
+        // One Stellar-wallet signature the first time this account uses chat;
+        // cached per account afterwards, so a remount does not re-prompt.
+        const { signer, identity } = await createXmtpSignerForStellarAccount(
+          address,
+          (message) => signMessageRef.current(message),
+        );
+        if (myGen !== initGenRef.current) return;
+        setInboxAddress(identity.address);
+
         const opts = getXmtpClientCreateOptions();
         const XMTP_INIT_TIMEOUT_MS = 15_000;
         const clientOptions = {
@@ -366,6 +365,7 @@ export function XmtpProvider({ children }: { children: React.ReactNode }) {
         newClient?.close();
         clientRef.current = null;
         setClient(null);
+        setInboxAddress(null);
         const err =
           e instanceof Error ? e : new Error(String(e ?? "XMTP init failed"));
         setError(err);
@@ -399,10 +399,11 @@ export function XmtpProvider({ children }: { children: React.ReactNode }) {
       status,
       error,
       activeAddress,
+      inboxAddress,
       featureEnabled,
       retry,
     }),
-    [client, status, error, activeAddress, featureEnabled, retry]
+    [client, status, error, activeAddress, inboxAddress, featureEnabled, retry]
   );
 
   return <XmtpCtx.Provider value={value}>{children}</XmtpCtx.Provider>;
