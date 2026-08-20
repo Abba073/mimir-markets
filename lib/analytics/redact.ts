@@ -88,21 +88,29 @@ export function redactProperties(input: Record<string, unknown>): RedactionResul
  * is never sent raw. Addresses reach analytics only as the salted actor id from
  * ./actor.ts.
  */
-const ADDRESS_LIKE = /^0x[0-9a-fA-F]{40}$/;
+/**
+ * A Stellar strkey: a `G…` account or a `C…` contract, 56 base32 characters.
+ *
+ * Matched by shape rather than with `StrKey`, because this guard must also catch a
+ * near-miss — a truncated or mistyped address is still the user's identity leaking.
+ * The `/^0x[0-9a-fA-F]{40}$/` this replaced matched no Stellar address at all,
+ * which meant the one check standing between a raw wallet and PostHog never fired.
+ */
+const ADDRESS_LIKE = /^[GC][A-Z2-7]{55}$/;
 
 export function containsRawAddress(properties: Record<string, unknown>): boolean {
   const seen = (value: unknown): boolean => {
-    if (typeof value === "string") return ADDRESS_LIKE.test(value);
+    if (typeof value === "string") return ADDRESS_LIKE.test(value.trim());
     if (Array.isArray(value)) return value.some(seen);
     if (value && typeof value === "object") return Object.values(value).some(seen);
     return false;
   };
-  // The contract address is a public constant, not a user identity.
-  const contract = String(properties.contract ?? "").toLowerCase();
+  // The contract address is a public constant, not a user identity. Compared
+  // verbatim — a strkey is case-sensitive, so folding it here could excuse a
+  // different address from the check.
+  const contract = String(properties.contract ?? "");
   return Object.entries(properties).some(
     ([key, value]) =>
-      key !== "contract" &&
-      seen(value) &&
-      String(value).toLowerCase() !== contract,
+      key !== "contract" && seen(value) && String(value) !== contract,
   );
 }

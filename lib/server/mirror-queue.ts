@@ -19,6 +19,7 @@ import "server-only";
 import { getChallengersByClaimId, getClaimsByFilter, listBasketSubscriptions } from "@/lib/db";
 import { allBasketDefinitions } from "./basket-directory";
 import { listDirectoryAgents } from "./agent-directory";
+import { parseAddressParam } from "./api-validation";
 
 export interface PendingMirror {
   basketId: string;
@@ -47,8 +48,12 @@ export async function pendingMirrorsFor(
   subscriber: string,
   perMarketUsdc: Record<string, number> = {},
 ): Promise<PendingMirror[]> {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(subscriber)) return [];
-  const wallet = subscriber.toLowerCase();
+  // Strkey check, and the address is then used verbatim throughout. The EVM regex
+  // this replaced rejected every Stellar address, so the mirror queue was empty
+  // for every real user; the `toLowerCase()` beside it would then have failed to
+  // match any stored strkey even if the guard had let one through.
+  const wallet = parseAddressParam(subscriber);
+  if (!wallet) return [];
 
   const subscribed = await listBasketSubscriptions(wallet).catch(() => []);
   if (subscribed.length === 0) return [];
@@ -71,16 +76,16 @@ export async function pendingMirrorsFor(
     for (const claim of openClaims) {
       // No point offering a mirror that cannot be staked before it settles.
       if (claim.deadline <= nowSeconds + 300) continue;
-      if (claim.creator.toLowerCase() === wallet) continue;
+      if (claim.creator === wallet) continue;
 
       const challengers = await getChallengersByClaimId(claim.id).catch(() => []);
-      const taken = new Set(challengers.map((c) => c.address.toLowerCase()));
+      const taken = new Set(challengers.map((c) => c.address));
       if (taken.has(wallet)) continue; // already mirrored, or acted independently
 
       for (const member of definition.members) {
         const agent = agentById.get(member.agentId);
         if (!agent) continue;
-        const position = challengers.find((c) => c.address.toLowerCase() === agent.address.toLowerCase());
+        const position = challengers.find((c) => c.address === agent.address);
         if (!position) continue;
 
         const mirrorUsdc = Math.round((budget * member.weightBps / 10_000) * 100) / 100;

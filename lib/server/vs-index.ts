@@ -124,9 +124,10 @@ function refreshVsIndexInBackground() {
 }
 
 function hydrateUserClaimsInBackground(address: string) {
-  const normalizedAddress = address.toLowerCase();
+  // The strkey itself is the map key. Folding case would collapse two distinct
+  // addresses onto one in-flight refresh entry.
   const state = getBackgroundState();
-  const entry = state.userRefreshes.get(normalizedAddress);
+  const entry = state.userRefreshes.get(address);
   if (entry?.promise || isBackgroundTaskCoolingDown(entry?.startedAt)) {
     return;
   }
@@ -142,15 +143,15 @@ function hydrateUserClaimsInBackground(address: string) {
     })
     .finally(() => {
       const currentState = getBackgroundState();
-      const currentEntry = currentState.userRefreshes.get(normalizedAddress);
+      const currentEntry = currentState.userRefreshes.get(address);
       if (currentEntry?.promise === nextEntry.promise) {
-        currentState.userRefreshes.set(normalizedAddress, {
+        currentState.userRefreshes.set(address, {
           startedAt: nextEntry.startedAt,
         });
       }
     });
 
-  state.userRefreshes.set(normalizedAddress, nextEntry);
+  state.userRefreshes.set(address, nextEntry);
 }
 
 function refreshIndexedClaimInBackground(options: {
@@ -367,13 +368,14 @@ async function loadStoredVsById(vsId: number) {
 }
 
 async function loadStoredUserVs(address: string) {
-  const normalized = address.toLowerCase();
+  // Verbatim strkey on both lookups: `claims.creator` and `challengers.address`
+  // now hold the exact address, so a folded value matches nothing.
   const creatorRows = await getClaimsByFilter({
-    creator: normalized,
+    creator: address,
     orderBy: "id_desc",
   });
 
-  const challengerClaimIds = await getClaimsByChallenger(normalized);
+  const challengerClaimIds = await getClaimsByChallenger(address);
   const creatorIds = new Set(creatorRows.map((row) => row.id));
   const otherIds = challengerClaimIds.filter((id) => !creatorIds.has(id));
   const otherRows =

@@ -48,10 +48,11 @@ function getSnapshotPath() {
     process.env.PROVEN_CACHE_DIR ||
     (process.env.VERCEL ? path.join(tmpdir(), "proven-cache") : path.join(process.cwd(), ".cache"));
 
-  return path.join(
-    baseDir,
-    `vs-index-${String(CONTRACT_ADDRESS).toLowerCase()}.json`
-  );
+  // The contract id is part of the filename so a redeploy cannot read a stale
+  // snapshot. Kept verbatim so the name matches the id everything else uses; a
+  // `C…` strkey is already uppercase base32, so this is not a rename in practice
+  // for any correctly-configured deployment.
+  return path.join(baseDir, `vs-index-${String(CONTRACT_ADDRESS)}.json`);
 }
 
 function sortVS(items: VSData[]) {
@@ -99,17 +100,25 @@ function shouldRebuildFromScratch(snapshot: VSSnapshot | null, count: number) {
   return Date.now() - snapshot.syncedAt > VS_FULL_REBUILD_MS;
 }
 
+/**
+ * Exact strkey comparison.
+ *
+ * The `toLowerCase()` pairing this used to do folded both sides identically, so it
+ * did still match — but only as long as both values came from the same corrupted
+ * source. Comparing a freshly-read `G…` against a lowercased cache entry (or the
+ * reverse) silently returned nothing, which is precisely what happened once the
+ * index stopped folding on write.
+ */
 function matchesUser(vs: VSData, address: string) {
-  const normalized = address.toLowerCase();
-  if (vs.creator.toLowerCase() === normalized) {
+  if (vs.creator === address) {
     return true;
   }
-  if (vs.opponent.toLowerCase() === normalized) {
+  if (vs.opponent === address) {
     return true;
   }
 
   return (vs.challenger_addresses ?? []).some(
-    (challengerAddress) => challengerAddress.toLowerCase() === normalized
+    (challengerAddress) => challengerAddress === address
   );
 }
 

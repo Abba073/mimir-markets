@@ -23,8 +23,12 @@ import {
 } from "../../lib/analytics/insights";
 
 const SALT = "test-salt-not-the-real-one";
-const ADDRESS = "0x1111111111111111111111111111111111111111";
-const OTHER = "0x2222222222222222222222222222222222222222";
+// Real Stellar strkeys. The EVM addresses these used to be made the whole actor
+// suite green against an `actorIdForAddress` that rejected every address a real
+// user has — and let the "case must not change identity" assertion below stand,
+// which is true of hex and false of case-sensitive base32.
+const ADDRESS = "GBO43ZBS4RBC2QFDKB23U6TBFEEK47ZLGSXDJSRV2H3PNQK5ZDEYXVLE";
+const OTHER = "GD2SI5PUEFKC7TONNX7OR72WMYUO7WZDSCDSIVWWXPDIDYW5OP3ETM5D";
 
 // ── Envelope ──────────────────────────────────────────────────────────────────
 
@@ -234,9 +238,19 @@ test("the contract address is public context, not a user identity", () => {
 
 test("the actor id is stable for the same address and salt", () => {
   const first = actorIdForAddress(ADDRESS, SALT);
-  const second = actorIdForAddress(ADDRESS.toUpperCase(), SALT);
-  assert.equal(first, second, "case must not change identity");
+  const second = actorIdForAddress(ADDRESS, SALT);
+  assert.equal(first, second, "the same address must map to the same actor id");
   assert.equal(first!.length, 32);
+});
+
+test("a lowercased strkey is not the same identity — it is not an identity", () => {
+  // The inverse of the EVM rule this suite used to assert ("case must not change
+  // identity"). Stellar strkeys are base32 over the UPPERCASE alphabet plus 2-7,
+  // so `toUpperCase()` is a no-op on a valid one — which is exactly why only the
+  // lowercase direction was ever destructive, and why it is the direction the
+  // ledger code was silently applying.
+  assert.equal(actorIdForAddress(ADDRESS.toUpperCase(), SALT), actorIdForAddress(ADDRESS, SALT));
+  assert.equal(actorIdForAddress(ADDRESS.toLowerCase(), SALT), null);
 });
 
 test("different addresses get different actor ids", () => {
@@ -249,13 +263,18 @@ test("rotating the salt severs the link to the old id", () => {
 
 test("the actor id never contains the address", () => {
   const id = actorIdForAddress(ADDRESS, SALT)!;
-  assert.equal(id.includes(ADDRESS.slice(2).toLowerCase()), false);
+  assert.equal(id.includes(ADDRESS), false);
+  assert.equal(id.toLowerCase().includes(ADDRESS.toLowerCase()), false);
   assert.equal(containsRawAddress({ distinct_id: id }), false);
 });
 
 test("a malformed address yields no actor id", () => {
   assert.equal(actorIdForAddress("not-an-address", SALT), null);
   assert.equal(actorIdForAddress("0x1234", SALT), null);
+  // An EVM address is not a Stellar address, however well-formed it is.
+  assert.equal(actorIdForAddress("0x1111111111111111111111111111111111111111", SALT), null);
+  // Right prefix, wrong length.
+  assert.equal(actorIdForAddress("GBO43ZBS4RBC2QFDKB23U6TBFEEK47ZL", SALT), null);
   assert.equal(actorIdForAddress("", SALT), null);
 });
 

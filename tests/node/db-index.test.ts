@@ -9,10 +9,22 @@ import type { ClaimData } from "../../lib/contract";
 const HAS_DB = Boolean(process.env.DATABASE_URL?.trim());
 const describeDb = HAS_DB ? test : test.skip;
 
+/**
+ * Real Stellar strkeys, with their mixed case intact.
+ *
+ * The EVM addresses these fixtures used to carry made the round-trip assertions
+ * below vacuous: an all-lowercase hex string survives `toLowerCase()` unchanged,
+ * so `assert.equal(stored.creator, claim.creator)` passed while the index was
+ * silently corrupting every real address. A strkey has upper and lower case in it,
+ * so the same assertion now actually tests something.
+ */
+const CREATOR = "GBO43ZBS4RBC2QFDKB23U6TBFEEK47ZLGSXDJSRV2H3PNQK5ZDEYXVLE";
+const CHALLENGER = "GD2SI5PUEFKC7TONNX7OR72WMYUO7WZDSCDSIVWWXPDIDYW5OP3ETM5D";
+
 function makeClaim(overrides: Partial<ClaimData> = {}): ClaimData {
   return {
     id: 101,
-    creator: "0x0000000000000000000000000000000000000abc",
+    creator: CREATOR,
     question: "Will the private claim stay private?",
     creator_position: "Yes",
     counter_position: "No",
@@ -40,13 +52,13 @@ function makeClaim(overrides: Partial<ClaimData> = {}): ClaimData {
     is_private: true,
     challengers: [
       {
-        address: "0x0000000000000000000000000000000000000def",
+        address: CHALLENGER,
         stake: 4,
         potential_payout: 6,
       },
     ],
-    first_challenger: "0x0000000000000000000000000000000000000def",
-    challenger_addresses: ["0x0000000000000000000000000000000000000def"],
+    first_challenger: CHALLENGER,
+    challenger_addresses: [CHALLENGER],
     total_pot: 11,
     ...overrides,
   };
@@ -77,14 +89,14 @@ describeDb("upsertClaim scrubs private content before storage", async () => {
   assert.deepEqual(challengers, [
     {
       claim_id: claim.id,
-      address: "0x0000000000000000000000000000000000000def",
+      address: CHALLENGER,
       stake: 4,
       potential_payout: 6,
     },
   ]);
 
   const claimIdsByChallenger = await db.getClaimsByChallenger(
-    "0x0000000000000000000000000000000000000def"
+    CHALLENGER
   );
   assert.deepEqual(claimIdsByChallenger, [claim.id]);
 });

@@ -23,6 +23,7 @@ import {
   type AgentPerformance, type AgentTradeResult, type TimeWindow,
 } from "@/lib/agents/performance";
 import { getAgentTradeRows, listAgentRecords } from "@/lib/db";
+import { parseAddressParam } from "./api-validation";
 
 export type AgentTrack = "byoa" | "council" | "philosopher" | "core";
 
@@ -96,7 +97,10 @@ function personaAgents(): DirectoryAgent[] {
 async function registryAgents(): Promise<DirectoryAgent[]> {
   const records = await listAgentRecords(200).catch(() => []);
   return records
-    .filter((record) => /^0x[0-9a-fA-F]{40}$/.test(record.operatorWallet))
+    // A registry row is only usable if its operator wallet is a real Stellar
+    // address. The `/^0x…{40}$/` this replaced matched no strkey at all, so every
+    // registered BYOA agent was silently filtered out of the directory.
+    .filter((record) => parseAddressParam(record.operatorWallet) !== null)
     .map((record) => ({
       id: record.agentId,
       displayName: record.displayName || record.agentId,

@@ -19,13 +19,15 @@ import {
 } from "@/lib/agents/performance";
 import { getAgentTradeRows, listAgentRecords } from "@/lib/db";
 import { listDirectoryAgents, type DirectoryAgent } from "./agent-directory";
+import { parseAddressParam } from "./api-validation";
 
 export interface OwnedAgentView extends DirectoryAgent {
   performance: AgentPerformance;
 }
 
 export interface ProfileView {
-  address: `0x${string}`;
+  /** A Stellar strkey — `G…` account or `C…` contract — exactly as validated. */
+  address: string;
   /** Set when this address IS an agent rather than a person. */
   agent: DirectoryAgent | null;
   /** Agents registered to this address as owner. */
@@ -41,8 +43,11 @@ export interface ProfileView {
 export async function buildProfile(
   rawAddress: string, window: TimeWindow = "all", nowMs = Date.now(),
 ): Promise<ProfileView | null> {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(rawAddress)) return null;
-  const address = rawAddress.toLowerCase() as `0x${string}`;
+  // A Stellar strkey, used verbatim from here on. The `/^0x…{40}$/` guard this
+  // replaced rejected every real address, so every profile page returned null;
+  // the `toLowerCase()` next to it would then have matched no stored row anyway.
+  const address = parseAddressParam(rawAddress);
+  if (!address) return null;
   const sinceMs = windowSinceMs(window, nowMs);
 
   const [directory, records, ownRows] = await Promise.all([
@@ -51,13 +56,13 @@ export async function buildProfile(
     getAgentTradeRows(address).catch(() => []),
   ]);
 
-  const agent = directory.find((candidate) => candidate.address.toLowerCase() === address) ?? null;
+  const agent = directory.find((candidate) => candidate.address === address) ?? null;
 
   // An owner's agents operate from their own wallets, so their P&L is looked up
   // per agent rather than rolled into the owner's own trading.
   const owned = directory.filter((candidate) => {
     const record = records.find((r) => r.agentId === candidate.id);
-    return record?.ownerWallet?.toLowerCase() === address;
+    return record?.ownerWallet === address;
   });
   const ownedRows = await Promise.all(
     owned.map((candidate) => getAgentTradeRows(candidate.address).catch(() => [])),

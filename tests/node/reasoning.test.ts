@@ -132,11 +132,21 @@ test("an underpriced claim always requires evidence and non-zero confidence", ()
 });
 
 test("the agent id must be a registry id, not a wallet address", () => {
-  const result = validateReasoningEvent(
-    event({ agentId: "0x1111111111111111111111111111111111111111" }),
+  // A Stellar `G…` account. The EVM address this used to pass could never trip
+  // the guard on a Stellar deployment, so the guard was untested and inert while
+  // this assertion stayed green.
+  const account = validateReasoningEvent(
+    event({ agentId: "GBO43ZBS4RBC2QFDKB23U6TBFEEK47ZLGSXDJSRV2H3PNQK5ZDEYXVLE" }),
   );
-  assert.equal(result.ok, false);
-  assert.match(result.errors.join(" "), /registry id, not a wallet address/);
+  assert.equal(account.ok, false);
+  assert.match(account.errors.join(" "), /registry id, not a wallet address/);
+
+  // A `C…` contract account is equally not a registry id.
+  const contract = validateReasoningEvent(
+    event({ agentId: "CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR" }),
+  );
+  assert.equal(contract.ok, false);
+  assert.match(contract.errors.join(" "), /registry id, not a wallet address/);
 });
 
 test("an oversized summary is rejected rather than silently truncated", () => {

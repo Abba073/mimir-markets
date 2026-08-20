@@ -16,6 +16,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { parseAddressParam } from "@/lib/server/api-validation";
 import type { ActorType } from "./events";
 
 export const ANON_ACTOR_ID = "anon";
@@ -37,10 +38,14 @@ function actorSalt(): string | null {
  * keeps the id short enough to read in a PostHog table.
  */
 export function actorIdForAddress(address: string, salt = actorSalt()): string | null {
-  const normalized = address?.trim().toLowerCase();
-  if (!normalized || !/^0x[0-9a-fA-F]{40}$/.test(normalized)) return null;
+  // Trimmed but NOT case-folded, and validated as a strkey rather than as 0x-hex.
+  // The EVM form this replaced rejected every Stellar address, so every event was
+  // degraded to anonymous; folding case would additionally hash two different
+  // accounts to the same actor id.
+  const trimmed = parseAddressParam(address);
+  if (!trimmed) return null;
   if (!salt) return null;
-  return createHash("sha256").update(`${salt}:${normalized}`).digest("hex").slice(0, 32);
+  return createHash("sha256").update(`${salt}:${trimmed}`).digest("hex").slice(0, 32);
 }
 
 export interface ResolvedActor {
