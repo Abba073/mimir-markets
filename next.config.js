@@ -36,17 +36,12 @@ const nextConfig = {
   // 404s. Anchoring to this file's dir fixes dev and prod builds alike.
   turbopack: {
     root: __dirname,
-    resolveAlias: {
-      // The x402 payment stack lazily imports its Solana scheme. Mimir does not
-      // settle on Solana, so that branch never runs — but Turbopack resolves the
-      // dynamic import statically and fails the build. Stub it instead of
-      // installing a whole extra chain SDK for dead code. (The x402 layer itself
-      // is ported in a separate phase; this alias stays until then.)
-      "@x402/svm/exact/client": { browser: "./lib/x402/svm-stub.ts", default: "./lib/x402/svm-stub.ts" },
-      // The former card-funding onramp stub is gone with the embedded-wallet
-      // provider that pulled in a payments SDK. No alias needed: no Stellar wallet
-      // module here imports one.
-    },
+    // No resolveAlias entries. Both stubs that used to live here existed to
+    // satisfy a dynamic import inside the embedded-wallet SDK's dependency tree —
+    // an unreachable Solana branch and a card-funding onramp — and that SDK is
+    // gone. Mimir's own x402 scheme (lib/x402/stellar-scheme.ts) imports only
+    // @x402/core and @stellar/stellar-sdk, neither of which lazily resolves a
+    // chain module Turbopack cannot find.
   },
 };
 
