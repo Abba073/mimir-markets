@@ -35,29 +35,46 @@ function cleanEnv(raw: string | undefined): string | undefined {
 }
 
 /**
- * Read a `NEXT_PUBLIC_`-prefixed config value. Next.js inlines these at build
- * time, so the literal `process.env.NEXT_PUBLIC_…` accesses have to stay written
- * out — a dynamic `process.env[key]` lookup resolves to `undefined` in the
- * browser bundle.
+ * Every `NEXT_PUBLIC_`-prefixed config value, read on demand.
+ *
+ * A FUNCTION, not a module-level const object, and the difference matters twice:
+ *
+ *  - The literal `process.env.NEXT_PUBLIC_…` accesses still have to be written
+ *    out, because Next.js substitutes them textually at build time and a dynamic
+ *    `process.env[key]` lookup resolves to `undefined` in the browser bundle. They
+ *    are just as literal inside a function body, so inlining is unaffected.
+ *  - Reading LAZILY means a process that configures itself after its first import
+ *    — a worker loading `.env.local` late, a test setting one var before calling
+ *    one getter — sees the value it set. Captured in a const, the object froze at
+ *    import and `getUsdcSacId()` could return a stale empty string forever, which
+ *    surfaced as spend permissions being rejected as `wrong_token` against a
+ *    perfectly well-configured deployment.
+ *
+ * The derived module-level constants below (`STELLAR_NETWORK`, `NETWORK_PASSPHRASE`
+ * and friends) are still resolved once at import: they are baked into the browser
+ * bundle and into explorer URLs, and a value that changed mid-process would be
+ * worse than one that is fixed.
  */
-function publicEnv(key: keyof typeof PUBLIC_ENV): string | undefined {
-  return cleanEnv(PUBLIC_ENV[key]);
+function publicEnvAll() {
+  return {
+    network: process.env.NEXT_PUBLIC_STELLAR_NETWORK,
+    networkPassphrase: process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE,
+    rpcUrl: process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
+    horizonUrl: process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL,
+    marketId: process.env.NEXT_PUBLIC_STELLAR_MARKET_CONTRACT_ID,
+    squadId: process.env.NEXT_PUBLIC_STELLAR_SQUAD_CONTRACT_ID,
+    usdcSac: process.env.NEXT_PUBLIC_STELLAR_USDC_SAC_ID,
+    usdcIssuer: process.env.NEXT_PUBLIC_STELLAR_USDC_ISSUER,
+    deployLedger: process.env.NEXT_PUBLIC_STELLAR_DEPLOY_LEDGER,
+    eventPageLimit: process.env.NEXT_PUBLIC_STELLAR_EVENT_PAGE_LIMIT,
+    eventMaxPages: process.env.NEXT_PUBLIC_STELLAR_EVENT_MAX_PAGES,
+    readConcurrency: process.env.NEXT_PUBLIC_STELLAR_READ_CONCURRENCY,
+  } as const;
 }
 
-const PUBLIC_ENV = {
-  network: process.env.NEXT_PUBLIC_STELLAR_NETWORK,
-  networkPassphrase: process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE,
-  rpcUrl: process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
-  horizonUrl: process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL,
-  marketId: process.env.NEXT_PUBLIC_STELLAR_MARKET_CONTRACT_ID,
-  squadId: process.env.NEXT_PUBLIC_STELLAR_SQUAD_CONTRACT_ID,
-  usdcSac: process.env.NEXT_PUBLIC_STELLAR_USDC_SAC_ID,
-  usdcIssuer: process.env.NEXT_PUBLIC_STELLAR_USDC_ISSUER,
-  deployLedger: process.env.NEXT_PUBLIC_STELLAR_DEPLOY_LEDGER,
-  eventPageLimit: process.env.NEXT_PUBLIC_STELLAR_EVENT_PAGE_LIMIT,
-  eventMaxPages: process.env.NEXT_PUBLIC_STELLAR_EVENT_MAX_PAGES,
-  readConcurrency: process.env.NEXT_PUBLIC_STELLAR_READ_CONCURRENCY,
-} as const;
+function publicEnv(key: keyof ReturnType<typeof publicEnvAll>): string | undefined {
+  return cleanEnv(publicEnvAll()[key]);
+}
 
 function envInt(raw: string | undefined, fallback: number): number {
   const value = Number(cleanEnv(raw) ?? fallback);
@@ -347,7 +364,7 @@ export async function waitForTransaction(
  * the RPC still retains", which is the honest default for a public endpoint.
  */
 export function getDeployLedger(): number {
-  return envInt(PUBLIC_ENV.deployLedger, 0);
+  return envInt(publicEnvAll().deployLedger, 0);
 }
 
 /**
@@ -357,7 +374,7 @@ export function getDeployLedger(): number {
  * {@link LEDGERS_PER_EVENT_PAGE}. 200 keeps individual responses small enough
  * that a serverless route can stream several pages inside its budget.
  */
-export const STELLAR_EVENT_PAGE_LIMIT = envInt(PUBLIC_ENV.eventPageLimit, 200);
+export const STELLAR_EVENT_PAGE_LIMIT = envInt(publicEnvAll().eventPageLimit, 200);
 
 /**
  * Ledgers one `getEvents` request scans, measured against Testnet RPC.
@@ -374,7 +391,7 @@ export const LEDGERS_PER_EVENT_PAGE = 10_000;
  * a busy contract. The default comfortably covers the full retention window
  * (~13 pages) with room for event-dense ranges.
  */
-export const STELLAR_EVENT_MAX_PAGES = envInt(PUBLIC_ENV.eventMaxPages, 50);
+export const STELLAR_EVENT_MAX_PAGES = envInt(publicEnvAll().eventMaxPages, 50);
 
 /**
  * Ledger sequence encoded in a `getEvents` cursor.
@@ -391,7 +408,7 @@ export function eventCursorLedger(cursor: string): number | null {
 }
 
 /** Concurrency limiter for bulk contract reads. See `lib/contract.ts`. */
-export const STELLAR_READ_CONCURRENCY = envInt(PUBLIC_ENV.readConcurrency, 5);
+export const STELLAR_READ_CONCURRENCY = envInt(publicEnvAll().readConcurrency, 5);
 
 export interface StellarEventScan {
   events: rpc.Api.EventResponse[];

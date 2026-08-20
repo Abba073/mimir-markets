@@ -29,7 +29,7 @@ interface PersonaVote {
   staked:      boolean;
   stakeUsdc:   number;
   txHash:      string | null;
-  blockNumber: number | null;
+  ledger:      number | null;
 }
 
 interface CouncilResponse {

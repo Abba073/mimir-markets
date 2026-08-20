@@ -677,6 +677,101 @@ export async function getFeePolicy(): Promise<{
   };
 }
 
+/** The address allowed to call `resolve_claim`. `null` when unreadable. */
+export async function getOracle(): Promise<string | null> {
+  if (!isMarketConfigured()) return null;
+  const tx = await marketReader().get_oracle();
+  return unwrapOrNull<string>(tx.result);
+}
+
+/** The contract owner — fee policy and oracle rotation. `null` when unreadable. */
+export async function getOwner(): Promise<string | null> {
+  if (!isMarketConfigured()) return null;
+  const tx = await marketReader().get_owner();
+  return unwrapOrNull<string>(tx.result);
+}
+
+/**
+ * The fee policy that has been announced but is still inside its timelock.
+ *
+ * `null` when nothing is queued. `executable_at` is a UNIX SECOND (Soroban's
+ * `env.ledger().timestamp()`), not a block number — there is no block height to
+ * compare against, so a caller checks it against the wall clock.
+ */
+export async function getPendingFeePolicy(): Promise<{
+  platform_fee_bps: number;
+  agent_owner_fee_bps: number;
+  platform_recipient: string | null;
+  executable_at: number;
+  /** True once the timelock has elapsed and `executeFeePolicy` will succeed. */
+  ready: boolean;
+} | null> {
+  if (!isMarketConfigured()) return null;
+  const tx = await marketReader().get_pending_fee_policy();
+  const pending = tx.result ?? null;
+  if (!pending) return null;
+  const executableAt = Number(pending.executable_at);
+  return {
+    platform_fee_bps:    Number(pending.platform_fee_bps),
+    agent_owner_fee_bps: Number(pending.agent_owner_fee_bps),
+    platform_recipient:  pending.platform_recipient ?? null,
+    executable_at:       executableAt,
+    ready:               Date.now() >= executableAt * 1000,
+  };
+}
+
+/**
+ * Announce a fee-policy change. Owner only; starts the timelock.
+ *
+ * The contract enforces a notice period between queueing and executing, which is
+ * why this and {@link executeFeePolicy} are two calls rather than one.
+ */
+export async function queueFeePolicy(
+  wallet: WalletArg,
+  params: {
+    platform_fee_bps: number;
+    agent_owner_fee_bps: number;
+    /** `G…`/`C…` recipient, or null to leave fees unassigned. */
+    platform_recipient?: string | null;
+  },
+): Promise<ContractWriteResult> {
+  const signer = requireSigner(wallet, "queue a fee policy");
+  const { write } = await sendCall<void>(
+    "queue_fee_policy",
+    await marketWriter(signer).queue_fee_policy({
+      platform_fee_bps:    params.platform_fee_bps,
+      agent_owner_fee_bps: params.agent_owner_fee_bps,
+      platform_recipient:  params.platform_recipient ?? undefined,
+    }),
+  );
+  return write;
+}
+
+/**
+ * Apply a queued policy once its timelock has elapsed.
+ *
+ * Permissionless on purpose: a lost owner key must not be able to strand a change
+ * that was already announced.
+ */
+export async function executeFeePolicy(wallet: WalletArg): Promise<ContractWriteResult> {
+  const signer = requireSigner(wallet, "execute the queued fee policy");
+  const { write } = await sendCall<void>(
+    "execute_fee_policy",
+    await marketWriter(signer).execute_fee_policy(),
+  );
+  return write;
+}
+
+/** Drop a queued policy before it executes. Owner only. */
+export async function cancelFeePolicy(wallet: WalletArg): Promise<ContractWriteResult> {
+  const signer = requireSigner(wallet, "cancel the queued fee policy");
+  const { write } = await sendCall<void>(
+    "cancel_fee_policy",
+    await marketWriter(signer).cancel_fee_policy(),
+  );
+  return write;
+}
+
 /** Parked funds owed to `address` because a payout push failed. Display USDC. */
 export async function getWithdrawable(address: string): Promise<number> {
   if (!isMarketConfigured()) return 0;

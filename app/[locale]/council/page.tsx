@@ -1,18 +1,7 @@
 import Link from "next/link";
-// TODO(stellar-chain): the log-scanning + readContract path below still points at
-// the deprecated EVM shim in lib/base. Migrating it needs Soroban `getEvents`
-// (see `paginatedGetEvents` in lib/stellar.ts) plus the generated bindings, which
-// is the council/agents indexing phase. Explorer links are already Stellar-native.
-import {
-  createBasePublicClient,
-  getContractAddress,
-  getDeployBlock,
-  isContractConfigured,
-  weiToEth,
-  paginatedGetLogs,
-} from "@/lib/base";
+import { readContractActivity } from "@/lib/server/contract-activity";
+import { readAgentBalances } from "@/lib/agent-wallets";
 import { getExplorerAddressUrl, getExplorerTxUrl } from "@/lib/stellar";
-import { unitsToUsdc } from "@/lib/usdc";
 import {
   getActiveCouncilPersonas,
 } from "@/lib/council-resolver";
@@ -28,84 +17,63 @@ export const revalidate = 30;
 interface PersonaStats {
   persona:         PersonaSpec;
   address:         string;
-  balanceEth:     number;
+  /**
+   * The persona's USDC bankroll, not its fee balance.
+   *
+   * The EVM version showed native ETH here because gas was a scarce budget worth
+   * watching. A Stellar fee is 0.00001 XLM against a 10,000 XLM Friendbot grant,
+   * so an XLM figure on this card would be a constant. What actually limits a
+   * persona is how much USDC it can still stake, which is what this now reports.
+   */
+  bankrollUsdc:    number;
   stakesPlaced:    number;
   totalStakedUsdc: number;
   recentBets:      Array<{
     claimId:      number;
     stakeUsdc:    number;
     txHash:       string;
-    blockNumber:  number;
+    ledger:       number;
   }>;
 }
 
 async function fetchCouncilStats(): Promise<PersonaStats[]> {
-  if (!isContractConfigured()) return [];
-  const client    = createBasePublicClient();
-  const address   = getContractAddress();
-  const fromBlock = getDeployBlock();
-  const personas  = getActiveCouncilPersonas();
-
+  const personas = getActiveCouncilPersonas();
   if (personas.length === 0) return [];
 
-  let challengeLogs: any[] = [];
-  try {
-    challengeLogs = await paginatedGetLogs(client, {
-      address,
-      event: {
-        type: "event",
-        name: "ClaimChallenged",
-        inputs: [
-          { name: "id",         type: "uint256", indexed: true },
-          { name: "challenger", type: "address", indexed: true },
-          { name: "stake",      type: "uint256", indexed: false },
-        ],
-      } as any,
-    }, fromBlock);
-  } catch (err) {
-    console.error("[council] fetchCouncilStats: log fetch failed:", err);
-  }
-
-  const byActor = new Map<string, Array<any>>();
-  for (const log of challengeLogs) {
-    const actor = String(log.args.challenger ?? "").toLowerCase();
-    if (!actor) continue;
-    const list = byActor.get(actor) ?? [];
-    list.push(log);
-    byActor.set(actor, list);
+  // One event scan for the whole page, grouped by actor. Rows come back newest
+  // first, and stakes are already display USDC.
+  //
+  // NOTE ON COMPLETENESS: Soroban RPC keeps a rolling ~1-week event window, so
+  // `stakesPlaced` is "stakes in the retained window", not all-time. The page says
+  // so beneath the totals rather than presenting a partial count as a lifetime one.
+  const activity = await readContractActivity();
+  const byActor = new Map<string, typeof activity.rows>();
+  for (const row of activity.rows) {
+    if (row.kind !== "challenged" || !row.actor) continue;
+    const list = byActor.get(row.actor) ?? [];
+    list.push(row);
+    byActor.set(row.actor, list);
   }
 
   return Promise.all(
     personas.map(async ({ persona, address: addr }) => {
-      const lowerAddr = addr.toLowerCase();
-      const logs = byActor.get(lowerAddr) ?? [];
+      // EXACT key lookup: a Stellar strkey is case-sensitive base32, so the
+      // lowercasing the EVM version applied to both sides would match nothing here.
+      const rows = byActor.get(addr) ?? [];
 
-      let balance = 0n;
-      try {
-        balance = await client.getBalance({ address: addr as `0x${string}` });
-      } catch {
-        balance = 0n;
-      }
-
-      const totalStakedUnits = logs.reduce<bigint>(
-        (acc, log: any) => acc + BigInt(log.args.stake ?? 0),
-        0n,
-      );
-      const sortedLogs = logs.slice().sort(
-        (a: any, b: any) => Number(b.blockNumber ?? 0) - Number(a.blockNumber ?? 0),
-      );
+      const balances = await readAgentBalances(addr).catch(() => null);
 
       return {
         persona,
         address: addr,
-        balanceEth:     weiToEth(balance), // gas wallet (native ETH)
-        stakesPlaced:    logs.length,
-        totalStakedUsdc: unitsToUsdc(totalStakedUnits), // USDC stakes
-        recentBets:      sortedLogs.slice(0, 3).map((log: any) => ({
-          claimId:     Number(log.args.id ?? 0),
-          stakeUsdc:   unitsToUsdc(BigInt(log.args.stake ?? 0)),
-          txHash:      log.transactionHash,
-          blockNumber: Number(log.blockNumber ?? 0),
+        bankrollUsdc:    balances?.usdc ?? 0,
+        stakesPlaced:    rows.length,
+        totalStakedUsdc: rows.reduce((acc, row) => acc + row.stakeUsdc, 0),
+        recentBets:      rows.slice(0, 3).map((row) => ({
+          claimId:   row.claimId,
+          stakeUsdc: row.stakeUsdc,
+          txHash:    row.txHash,
+          ledger:    row.ledger,
         })),
       };
     }),
@@ -122,7 +90,7 @@ const ARCHETYPE_LABEL: Record<PersonaSpec["archetype"], string> = {
 };
 
 function PersonaCard({ stats }: { stats: PersonaStats }) {
-  const { persona, address, balanceEth, stakesPlaced, totalStakedUsdc, recentBets } = stats;
+  const { persona, address, bankrollUsdc, stakesPlaced, totalStakedUsdc, recentBets } = stats;
   const active = stakesPlaced > 0;
 
   return (
@@ -168,9 +136,9 @@ function PersonaCard({ stats }: { stats: PersonaStats }) {
 
       <dl className="mt-auto grid grid-cols-3 gap-2 border-t border-pv-border/30 pt-3 text-center">
         <div>
-          <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-pv-muted">balance</dt>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-pv-muted">bankroll</dt>
           <dd className="mt-0.5 font-display text-sm font-bold tabular-nums text-pv-text">
-            {balanceEth.toFixed(2)}
+            {bankrollUsdc.toFixed(2)}
           </dd>
         </div>
         <div>
@@ -228,7 +196,7 @@ export default async function CouncilPage() {
 
   const totalStakes       = stats.reduce((acc, s) => acc + s.stakesPlaced, 0);
   const totalStakedUsdc   = stats.reduce((acc, s) => acc + s.totalStakedUsdc, 0);
-  const totalBankrollBot = stats.reduce((acc, s) => acc + s.balanceEth, 0);
+  const totalBankrollUsdc = stats.reduce((acc, s) => acc + s.bankrollUsdc, 0);
 
   return (
     <div className="pb-10">
@@ -253,9 +221,20 @@ export default async function CouncilPage() {
               <span className="tabular-nums text-pv-text">{totalStakedUsdc.toFixed(2)}</span> USDC at risk
             </span>
             <span className="rounded-md border border-pv-border/40 bg-pv-surface2/40 px-2 py-1 text-pv-muted">
-              bankroll <span className="tabular-nums text-pv-text">{totalBankrollBot.toFixed(2)}</span> ETH gas
+              bankroll <span className="tabular-nums text-pv-text">{totalBankrollUsdc.toFixed(2)}</span> USDC
             </span>
           </div>
+        )}
+        {/*
+          Said plainly rather than left implied: Soroban RPC retains roughly a
+          week of events, so the stake counts above are a recent window, not a
+          lifetime tally. Presenting a partial count as all-time would make an
+          active persona look idle after a quiet week.
+        */}
+        {stats.length > 0 && (
+          <p className="pt-1 text-center font-mono text-[10px] uppercase tracking-[0.16em] text-pv-muted">
+            stake counts cover the last ~7 days of ledger events
+          </p>
         )}
       </header>
 
