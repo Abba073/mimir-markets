@@ -9,6 +9,7 @@ import {
   getExplorerTxUrl,
   isMarketConfigured,
 } from "@/lib/stellar";
+import { ZERO_HASH_HEX } from "@/lib/content-hash";
 import { getPersonaForAddress } from "@/lib/council-resolver";
 import type { PersonaSpec } from "@/agents/council/personas";
 import { BlueprintHeading } from "@/components/BlueprintGrid";
@@ -514,8 +515,12 @@ export default async function StatsPage() {
                         <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-bold uppercase tracking-[0.14em] ${tier.cls}`}>{tier.label} · {s.confidence}%</span>
                       </div>
                       <p className="line-clamp-2 text-[13px] text-pv-text/85">{s.summary}</p>
+                      {/* Bare lowercase hex, no `0x` — see lib/content-hash.ts.
+                          `lib/contract.ts`'s `toHex` already drops an all-zero
+                          digest, so this only has to tolerate a value arriving
+                          from some other path. */}
                       {s.evidenceHash &&
-                        s.evidenceHash !== "0x0000000000000000000000000000000000000000000000000000000000000000" && (
+                        s.evidenceHash.replace(/^0x/, "") !== ZERO_HASH_HEX && (
                           <div className="mt-1.5 flex items-center gap-1.5">
                             <span className="font-mono text-[10px] uppercase tracking-wide text-pv-muted">Evidence hash:</span>
                             <span className="max-w-[260px] truncate font-mono text-[10px] text-pv-emerald/85">{s.evidenceHash}</span>

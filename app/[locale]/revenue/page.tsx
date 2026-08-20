@@ -8,7 +8,7 @@
  *
  * Reads the durable Neon ledger via /api/payments/revenue (falls back to
  * in-memory when no DB is configured). Every payment links to its x402
- * settlement on BaseScan — the chain is the ultimate source of truth.
+ * settlement on stellar.expert — the ledger is the ultimate source of truth.
  */
 
 import { useEffect, useState } from "react";
