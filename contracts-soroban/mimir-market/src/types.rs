@@ -257,4 +257,5 @@ pub enum Error {
     AlreadyClaimedPayout = 34,
     ChallengersDidNotWin = 35,
     UnsupportedDecimals = 36,
+    InvalidConfidence = 37,
 }

@@ -47,6 +47,9 @@ pub fn resolve_claim(
     if winner_side == WinnerSide::None {
         return Err(Error::InvalidVerdict);
     }
+    if confidence > 100 {
+        return Err(Error::InvalidConfidence);
+    }
 
     claim.state = ClaimState::Resolved;
     claim.winner_side = winner_side;
